@@ -3,19 +3,19 @@ package dockerx
 import (
 	"context"
 	"fmt"
-	"io"
 	"log/slog"
 	"slices"
 	"strings"
 	"time"
 
+	"net/netip"
+
+	cerrdefs "github.com/containerd/errdefs"
 	"github.com/distribution/reference"
-	"github.com/docker/docker/api/types/container"
-	"github.com/docker/docker/api/types/image"
-	"github.com/docker/docker/api/types/network"
-	"github.com/docker/docker/client"
-	"github.com/docker/go-connections/nat"
 	dockerspec "github.com/moby/docker-image-spec/specs-go/v1"
+	"github.com/moby/moby/api/types/container"
+	"github.com/moby/moby/api/types/network"
+	"github.com/moby/moby/client"
 )
 
 // Real is the production Client backed by the Docker Engine API.
@@ -26,7 +26,7 @@ type Real struct {
 // New connects to the Docker daemon using the standard environment
 // (DOCKER_HOST etc.), negotiating the API version.
 func New() (*Real, error) {
-	cli, err := client.NewClientWithOpts(client.FromEnv, client.WithAPIVersionNegotiation())
+	cli, err := client.New(client.FromEnv, client.WithAPIVersionNegotiation())
 	if err != nil {
 		return nil, fmt.Errorf("connecting to docker: %w", err)
 	}
@@ -35,17 +35,17 @@ func New() (*Real, error) {
 
 // Ping verifies the daemon is reachable.
 func (r *Real) Ping(ctx context.Context) error {
-	_, err := r.cli.Ping(ctx)
+	_, err := r.cli.Ping(ctx, client.PingOptions{})
 	return err
 }
 
 func (r *Real) ListRunning(ctx context.Context) ([]ContainerInfo, error) {
-	list, err := r.cli.ContainerList(ctx, container.ListOptions{})
+	list, err := r.cli.ContainerList(ctx, client.ContainerListOptions{})
 	if err != nil {
 		return nil, err
 	}
-	out := make([]ContainerInfo, 0, len(list))
-	for _, c := range list {
+	out := make([]ContainerInfo, 0, len(list.Items))
+	for _, c := range list.Items {
 		name := ""
 		if len(c.Names) > 0 {
 			name = strings.TrimPrefix(c.Names[0], "/")
@@ -55,8 +55,8 @@ func (r *Real) ListRunning(ctx context.Context) ([]ContainerInfo, error) {
 		// at a newer image, the list API reports a bare image ID instead of
 		// the tag. Fall back to the reference the container was created with.
 		if strings.HasPrefix(imageRef, "sha256:") {
-			if insp, err := r.cli.ContainerInspect(ctx, c.ID); err == nil && insp.Config != nil {
-				imageRef = insp.Config.Image
+			if insp, err := r.cli.ContainerInspect(ctx, c.ID, client.ContainerInspectOptions{}); err == nil && insp.Container.Config != nil {
+				imageRef = insp.Container.Config.Image
 			}
 		}
 		out = append(out, ContainerInfo{
@@ -70,7 +70,7 @@ func (r *Real) ListRunning(ctx context.Context) ([]ContainerInfo, error) {
 }
 
 func (r *Real) RemoteDigest(ctx context.Context, imageRef string) (string, error) {
-	insp, err := r.cli.DistributionInspect(ctx, imageRef, "")
+	insp, err := r.cli.DistributionInspect(ctx, imageRef, client.DistributionInspectOptions{})
 	if err != nil {
 		return "", err
 	}
@@ -78,18 +78,18 @@ func (r *Real) RemoteDigest(ctx context.Context, imageRef string) (string, error
 }
 
 func (r *Real) ImageStatus(ctx context.Context, containerID, imageRef, remoteDigest string) (ImageStatus, error) {
-	cont, err := r.cli.ContainerInspect(ctx, containerID)
+	cont, err := r.cli.ContainerInspect(ctx, containerID, client.ContainerInspectOptions{})
 	if err != nil {
 		return "", err
 	}
 	// containerd image store: the container's image ID is the manifest digest
 	// itself, so a direct match settles it.
-	if cont.Image == remoteDigest {
+	if cont.Container.Image == remoteDigest {
 		return StatusCurrent, nil
 	}
-	img, _, err := r.cli.ImageInspectWithRaw(ctx, cont.Image)
+	img, err := r.cli.ImageInspect(ctx, cont.Container.Image)
 	if err != nil {
-		if client.IsErrNotFound(err) {
+		if cerrdefs.IsNotFound(err) {
 			// containerd image store: when a tag is re-pointed, the
 			// superseded manifest becomes uninspectable. The image clearly
 			// came from a registry and clearly isn't what it serves now.
@@ -123,27 +123,29 @@ func repoOf(imageRef string) string {
 }
 
 func (r *Real) Pull(ctx context.Context, imageRef string) error {
-	rc, err := r.cli.ImagePull(ctx, imageRef, image.PullOptions{})
+	resp, err := r.cli.ImagePull(ctx, imageRef, client.ImagePullOptions{})
 	if err != nil {
 		return err
 	}
-	defer rc.Close()
-	// The pull only completes once the response stream is drained.
-	_, err = io.Copy(io.Discard, rc)
-	return err
+	defer resp.Close()
+	// The pull only completes once the response stream is consumed.
+	return resp.Wait(ctx)
 }
 
 func (r *Real) Stop(ctx context.Context, id string, timeout time.Duration) error {
 	secs := int(timeout.Seconds())
-	return r.cli.ContainerStop(ctx, id, container.StopOptions{Timeout: &secs})
+	_, err := r.cli.ContainerStop(ctx, id, client.ContainerStopOptions{Timeout: &secs})
+	return err
 }
 
 func (r *Real) Start(ctx context.Context, id string) error {
-	return r.cli.ContainerStart(ctx, id, container.StartOptions{})
+	_, err := r.cli.ContainerStart(ctx, id, client.ContainerStartOptions{})
+	return err
 }
 
 func (r *Real) Rename(ctx context.Context, id, name string) error {
-	return r.cli.ContainerRename(ctx, id, name)
+	_, err := r.cli.ContainerRename(ctx, id, client.ContainerRenameOptions{NewName: name})
+	return err
 }
 
 // CloneSpec is a captured, sanitized container configuration ready to be
@@ -155,13 +157,14 @@ type CloneSpec struct {
 }
 
 func (r *Real) CaptureSpec(ctx context.Context, containerID string) (*CloneSpec, error) {
-	src, err := r.cli.ContainerInspect(ctx, containerID)
+	insp, err := r.cli.ContainerInspect(ctx, containerID, client.ContainerInspectOptions{})
 	if err != nil {
 		return nil, err
 	}
+	src := insp.Container
 	cfg := src.Config
 
-	if img, _, err := r.cli.ImageInspectWithRaw(ctx, src.Image); err == nil && img.Config != nil {
+	if img, err := r.cli.ImageInspect(ctx, src.Image); err == nil && img.Config != nil {
 		stripImageDefaults(cfg, img.Config)
 	} else {
 		slog.Warn("current image config unreadable; changed image defaults (CMD, ENV, …) may not be picked up",
@@ -177,11 +180,11 @@ func (r *Real) CaptureSpec(ctx context.Context, containerID string) (*CloneSpec,
 			cp := *ep
 			cp.EndpointID = ""
 			cp.NetworkID = ""
-			cp.IPAddress = ""
-			cp.Gateway = ""
-			cp.GlobalIPv6Address = ""
-			cp.IPv6Gateway = ""
-			cp.MacAddress = ""
+			cp.IPAddress = netip.Addr{}
+			cp.Gateway = netip.Addr{}
+			cp.GlobalIPv6Address = netip.Addr{}
+			cp.IPv6Gateway = netip.Addr{}
+			cp.MacAddress = nil
 			endpoints[netName] = &cp
 		}
 		netCfg = &network.NetworkingConfig{EndpointsConfig: endpoints}
@@ -231,7 +234,9 @@ func stripImageDefaults(cfg *container.Config, img *dockerspec.DockerOCIImageCon
 		}
 	}
 	for p := range img.ExposedPorts {
-		delete(cfg.ExposedPorts, nat.Port(p))
+		if port, err := network.ParsePort(p); err == nil {
+			delete(cfg.ExposedPorts, port)
+		}
 	}
 	for v := range img.Volumes {
 		delete(cfg.Volumes, v)
@@ -240,7 +245,12 @@ func stripImageDefaults(cfg *container.Config, img *dockerspec.DockerOCIImageCon
 
 func (r *Real) CreateFromSpec(ctx context.Context, spec *CloneSpec, name, imageRef string) (string, error) {
 	spec.cfg.Image = imageRef
-	resp, err := r.cli.ContainerCreate(ctx, spec.cfg, spec.host, spec.net, nil, name)
+	resp, err := r.cli.ContainerCreate(ctx, client.ContainerCreateOptions{
+		Config:           spec.cfg,
+		HostConfig:       spec.host,
+		NetworkingConfig: spec.net,
+		Name:             name,
+	})
 	if err != nil {
 		return "", err
 	}
@@ -248,21 +258,22 @@ func (r *Real) CreateFromSpec(ctx context.Context, spec *CloneSpec, name, imageR
 }
 
 func (r *Real) Remove(ctx context.Context, id string) error {
-	return r.cli.ContainerRemove(ctx, id, container.RemoveOptions{Force: true})
+	_, err := r.cli.ContainerRemove(ctx, id, client.ContainerRemoveOptions{Force: true})
+	return err
 }
 
 func (r *Real) State(ctx context.Context, id string) (State, error) {
-	insp, err := r.cli.ContainerInspect(ctx, id)
+	insp, err := r.cli.ContainerInspect(ctx, id, client.ContainerInspectOptions{})
 	if err != nil {
 		return State{}, err
 	}
 	st := State{}
-	if insp.State != nil {
-		st.Running = insp.State.Running
-		st.RestartCount = insp.RestartCount
-		st.ExitCode = insp.State.ExitCode
-		if insp.State.Health != nil {
-			st.Health = strings.ToLower(insp.State.Health.Status)
+	if insp.Container.State != nil {
+		st.Running = insp.Container.State.Running
+		st.RestartCount = insp.Container.RestartCount
+		st.ExitCode = insp.Container.State.ExitCode
+		if insp.Container.State.Health != nil {
+			st.Health = strings.ToLower(string(insp.Container.State.Health.Status))
 		}
 	}
 	return st, nil
