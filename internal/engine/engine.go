@@ -29,6 +29,11 @@ type Engine struct {
 	Notifier notify.Notifier
 	Updater  *update.Updater
 	DryRun   bool
+
+	// warned tracks containers whose registry check already failed once, so
+	// a permanently un-checkable container (private image without creds,
+	// dangling local build) logs one warning, not one per cycle.
+	warned map[string]bool
 }
 
 func New(cli dockerx.Client, cfg config.Config, n notify.Notifier) *Engine {
@@ -77,9 +82,19 @@ func (e *Engine) handle(ctx context.Context, c dockerx.ContainerInfo) {
 			slog.Debug("locally built image, skipping", "container", c.Name)
 			return
 		}
-		slog.Warn("cannot check registry, skipping", "container", c.Name, "image", c.Image, "err", err)
+		if e.warned == nil {
+			e.warned = map[string]bool{}
+		}
+		if e.warned[c.ID] {
+			slog.Debug("registry still unreachable, skipping", "container", c.Name)
+		} else {
+			e.warned[c.ID] = true
+			slog.Warn("cannot check registry, skipping (further failures logged at debug)",
+				"container", c.Name, "image", c.Image, "err", err)
+		}
 		return
 	}
+	delete(e.warned, c.ID)
 	status, err := e.Client.ImageStatus(ctx, c.ID, c.Image, remote)
 	if err != nil {
 		slog.Warn("cannot determine image status, skipping", "container", c.Name, "err", err)
