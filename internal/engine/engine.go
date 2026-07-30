@@ -71,6 +71,12 @@ func (e *Engine) handle(ctx context.Context, c dockerx.ContainerInfo) {
 
 	remote, err := e.Client.RemoteDigest(ctx, c.Image)
 	if err != nil {
+		// Locally built images (no repo digest) routinely have no registry
+		// counterpart — skip them quietly rather than warning every cycle.
+		if st, serr := e.Client.ImageStatus(ctx, c.ID, c.Image, ""); serr == nil && st == dockerx.StatusLocalOnly {
+			slog.Debug("locally built image, skipping", "container", c.Name)
+			return
+		}
 		slog.Warn("cannot check registry, skipping", "container", c.Name, "image", c.Image, "err", err)
 		return
 	}
