@@ -47,6 +47,7 @@ type Client interface {
 	// It must handle both the classic image store (image ID ≠ manifest
 	// digest, RepoDigests populated) and the containerd image store (image
 	// ID == manifest digest; superseded manifests become uninspectable).
+	// remoteDigest may be "" to probe only for StatusLocalOnly.
 	ImageStatus(ctx context.Context, containerID, imageRef, remoteDigest string) (ImageStatus, error)
 	// Pull downloads an image.
 	Pull(ctx context.Context, imageRef string) error
