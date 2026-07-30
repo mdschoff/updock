@@ -1,0 +1,4 @@
+/updock
+/dist/
+*.test
+.DS_Store

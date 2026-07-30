@@ -1,0 +1,7 @@
+services:
+  updock:
+    image: ghcr.io/mdschoff/updock:latest
+    restart: unless-stopped
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ./updock.yml:/etc/updock/updock.yml:ro
