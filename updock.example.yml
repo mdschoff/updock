@@ -1,0 +1,13 @@
+# updock configuration — every key is optional; these are the defaults.
+interval: 6h
+verify_window: 90s
+stop_timeout: 30s
+opt_in: false
+default_mode: auto # auto | notify | hold
+
+notify:
+  ntfy:
+    url: https://ntfy.sh
+    topic: "" # set a topic to enable ntfy notifications
+  webhook:
+    url: "" # set a URL to receive JSON event POSTs
