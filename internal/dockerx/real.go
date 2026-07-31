@@ -70,7 +70,9 @@ func (r *Real) ListRunning(ctx context.Context) ([]ContainerInfo, error) {
 }
 
 func (r *Real) RemoteDigest(ctx context.Context, imageRef string) (string, error) {
-	insp, err := r.cli.DistributionInspect(ctx, imageRef, client.DistributionInspectOptions{})
+	insp, err := r.cli.DistributionInspect(ctx, imageRef, client.DistributionInspectOptions{
+		EncodedRegistryAuth: encodedAuthFor(imageRef),
+	})
 	if err != nil {
 		return "", err
 	}
@@ -123,7 +125,9 @@ func repoOf(imageRef string) string {
 }
 
 func (r *Real) Pull(ctx context.Context, imageRef string) error {
-	resp, err := r.cli.ImagePull(ctx, imageRef, client.ImagePullOptions{})
+	resp, err := r.cli.ImagePull(ctx, imageRef, client.ImagePullOptions{
+		RegistryAuth: encodedAuthFor(imageRef),
+	})
 	if err != nil {
 		return err
 	}

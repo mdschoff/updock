@@ -1,5 +1,10 @@
 # updock
 
+[![CI](https://github.com/mdschoff/updock/actions/workflows/ci.yml/badge.svg)](https://github.com/mdschoff/updock/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/mdschoff/updock?include_prereleases)](https://github.com/mdschoff/updock/releases)
+[![Go Report Card](https://goreportcard.com/badge/github.com/mdschoff/updock)](https://goreportcard.com/report/github.com/mdschoff/updock)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+
 **Automatic Docker container updates that can't leave you broken.**
 
 updock watches your running containers, updates them when their image gets a new release — and if the new version crashes or fails its healthcheck, **automatically rolls back to the version that worked** and tells you about it.
@@ -80,6 +85,21 @@ notify:
 
 Containers pinned by digest (`image@sha256:…`) and locally built images are always skipped.
 
+### Private registries
+
+updock reads credentials from the standard docker `config.json` (plain `auths`
+entries and credential helpers). When running as a container, mount your
+config read-only:
+
+```yaml
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ~/.docker/config.json:/root/.docker/config.json:ro
+```
+
+Set `DOCKER_CONFIG` if your config lives elsewhere. No credentials configured
+for a registry simply means anonymous access — same as before.
+
 ## Migrating from Watchtower
 
 updock honors `com.centurylinklabs.watchtower.enable` labels, so your existing exclusions keep working — swap the service in your compose file and you're done. What you gain: updates are verified and rolled back on failure instead of applied blind.
@@ -108,9 +128,9 @@ The e2e test spins up a throwaway local registry, pushes a good image, verifies 
 
 - Podman support
 - Changelog/release-notes diff in notifications
-- Registry auth (private images)
 - `updock approve` for held updates
 - Discord/Slack/Gotify notifiers
+- Prometheus metrics
 
 ## License
 
