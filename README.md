@@ -9,6 +9,8 @@
 
 updock watches your running containers, updates them when their image gets a new release — and if the new version crashes or fails its healthcheck, **automatically rolls back to the version that worked** and tells you about it.
 
+![updock catching a broken update and rolling back automatically](demo.gif)
+
 ```
 pull → swap → verify → keep it   (or: verify fails → roll back → notify)
 ```
