@@ -128,6 +128,7 @@ The e2e test spins up a throwaway local registry, pushes a good image, verifies 
 
 ## Roadmap
 
+- Persistent event log (update/rollback history that survives container restarts)
 - Podman support
 - Changelog/release-notes diff in notifications
 - `updock approve` for held updates
