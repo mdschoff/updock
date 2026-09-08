@@ -77,6 +77,12 @@ func TestPrivateRegistryUpdate(t *testing.T) {
 		[]byte(fmt.Sprintf(`{"auths":{"%s":{"auth":"%s"}}}`, authRegistryAddr, auth)), 0o600); err != nil {
 		t.Fatal(err)
 	}
+	// Overriding DOCKER_CONFIG also hides the CLI's context store — which may
+	// be what points at a non-default daemon socket (OrbStack, Docker
+	// Desktop). Resolve the endpoint from the real config first and pin it so
+	// both the docker CLI and the SDK keep talking to the same daemon.
+	host := docker(t, "context", "inspect", "--format", "{{.Endpoints.docker.Host}}")
+	t.Setenv("DOCKER_HOST", host)
 	t.Setenv("DOCKER_CONFIG", cfgDir)
 
 	// v1 up and running.

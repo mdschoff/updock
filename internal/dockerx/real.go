@@ -4,11 +4,12 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"net/netip"
+	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"time"
-
-	"net/netip"
 
 	cerrdefs "github.com/containerd/errdefs"
 	"github.com/distribution/reference"
@@ -24,13 +25,56 @@ type Real struct {
 }
 
 // New connects to the Docker daemon using the standard environment
-// (DOCKER_HOST etc.), negotiating the API version.
+// (DOCKER_HOST etc.), negotiating the API version. When DOCKER_HOST is unset
+// and the default socket is absent, well-known per-user sockets (OrbStack,
+// Docker Desktop, Colima, Rancher Desktop, rootless Docker) are tried — the
+// docker CLI finds these via its context mechanism, which the SDK does not
+// read, so a bare `updock` binary would otherwise fail where `docker` works.
 func New() (*Real, error) {
-	cli, err := client.New(client.FromEnv, client.WithAPIVersionNegotiation())
+	opts := []client.Opt{client.FromEnv, client.WithAPIVersionNegotiation()}
+	if host := discoverHost(); host != "" {
+		slog.Debug("default docker socket absent, using discovered socket", "host", host)
+		opts = append(opts, client.WithHost(host))
+	}
+	cli, err := client.New(opts...)
 	if err != nil {
 		return nil, fmt.Errorf("connecting to docker: %w", err)
 	}
 	return &Real{cli: cli}, nil
+}
+
+func discoverHost() string {
+	home, _ := os.UserHomeDir()
+	return discoverHostIn(os.Getenv("DOCKER_HOST"), "/var/run/docker.sock", home, os.Getenv("XDG_RUNTIME_DIR"))
+}
+
+// discoverHostIn returns a unix:// host for the first existing well-known
+// socket, or "" when the environment or the default socket already answers.
+func discoverHostIn(envHost, defaultSock, home, xdgRuntime string) string {
+	if envHost != "" {
+		return "" // explicit configuration always wins
+	}
+	if _, err := os.Stat(defaultSock); err == nil {
+		return "" // default socket exists; let the SDK use it
+	}
+	var candidates []string
+	if home != "" {
+		candidates = append(candidates,
+			filepath.Join(home, ".orbstack/run/docker.sock"),   // OrbStack
+			filepath.Join(home, ".docker/run/docker.sock"),     // Docker Desktop
+			filepath.Join(home, ".colima/default/docker.sock"), // Colima
+			filepath.Join(home, ".rd/docker.sock"),             // Rancher Desktop
+		)
+	}
+	if xdgRuntime != "" {
+		candidates = append(candidates, filepath.Join(xdgRuntime, "docker.sock")) // rootless Docker
+	}
+	for _, p := range candidates {
+		if _, err := os.Stat(p); err == nil {
+			return "unix://" + p
+		}
+	}
+	return ""
 }
 
 // Ping verifies the daemon is reachable.
