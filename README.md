@@ -57,6 +57,8 @@ After swapping in the new container, updock watches it for a verification window
 
 The old container is kept intact (stopped, renamed `<name>.updock-backup`) until verification passes, so rollback is a rename + start — no re-pull, no data loss. Volumes, networks, port mappings, env vars and labels are preserved; defaults that come from the image itself (CMD, ENV, …) correctly follow the **new** image.
 
+**Crash-safe:** a shutdown signal during an update can't strand you — cleanup runs to completion on a cancellation-immune context, and if the host dies outright (power loss, SIGKILL), the next start finds the leftover backup, gives the replacement a fresh verification window, and concludes the update the same way it would have: committed or rolled back. Transient daemon hiccups during verification are retried, never treated as a failing container.
+
 ## Configuration
 
 Everything works with zero config. To customize, mount a YAML file at `/etc/updock/updock.yml`:

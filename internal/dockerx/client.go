@@ -40,6 +40,12 @@ const (
 type Client interface {
 	// ListRunning returns all currently running containers.
 	ListRunning(ctx context.Context) ([]ContainerInfo, error)
+	// ListBackups returns all containers (running or not) whose name carries
+	// the given suffix — the stopped originals an interrupted update left
+	// behind.
+	ListBackups(ctx context.Context, suffix string) ([]ContainerInfo, error)
+	// FindByName looks a container up by exact name, running or not.
+	FindByName(ctx context.Context, name string) (ContainerInfo, bool, error)
 	// RemoteDigest returns the manifest digest the registry currently serves
 	// for the given image reference, without pulling it.
 	RemoteDigest(ctx context.Context, imageRef string) (string, error)

@@ -49,8 +49,10 @@ func New(cli dockerx.Client, cfg config.Config, n notify.Notifier) *Engine {
 	}
 }
 
-// RunOnce checks every managed container and acts per its mode.
+// RunOnce reconciles any interrupted updates, then checks every managed
+// container and acts per its mode.
 func (e *Engine) RunOnce(ctx context.Context) error {
+	e.reconcile(ctx)
 	containers, err := e.Client.ListRunning(ctx)
 	if err != nil {
 		return err
@@ -62,6 +64,30 @@ func (e *Engine) RunOnce(ctx context.Context) error {
 		e.handle(ctx, c)
 	}
 	return nil
+}
+
+// reconcile resolves *.updock-backup containers stranded by an interrupted
+// run (power loss, SIGKILL mid-update): the replacement gets a fresh
+// verification window and the update concludes as committed or rolled back.
+func (e *Engine) reconcile(ctx context.Context) {
+	backups, err := e.Client.ListBackups(ctx, update.BackupSuffix)
+	if err != nil {
+		slog.Warn("cannot scan for interrupted updates", "err", err)
+		return
+	}
+	for _, b := range backups {
+		if _, manage := e.modeFor(b); !manage {
+			slog.Debug("ignoring unmanaged backup container", "backup", b.Name)
+			continue
+		}
+		slog.Warn("found interrupted update, reconciling", "backup", b.Name)
+		res := e.Updater.Reconcile(ctx, b)
+		detail := res.Detail
+		if res.Err != nil {
+			detail = res.Err.Error()
+		}
+		e.emit(res.Container, string(res.Action), detail)
+	}
 }
 
 func (e *Engine) handle(ctx context.Context, c dockerx.ContainerInfo) {

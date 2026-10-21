@@ -88,8 +88,46 @@ func (r *Real) ListRunning(ctx context.Context) ([]ContainerInfo, error) {
 	if err != nil {
 		return nil, err
 	}
-	out := make([]ContainerInfo, 0, len(list.Items))
+	return r.toInfos(ctx, list.Items), nil
+}
+
+func (r *Real) ListBackups(ctx context.Context, suffix string) ([]ContainerInfo, error) {
+	list, err := r.cli.ContainerList(ctx, client.ContainerListOptions{All: true})
+	if err != nil {
+		return nil, err
+	}
+	matching := list.Items[:0]
 	for _, c := range list.Items {
+		if len(c.Names) > 0 && strings.HasSuffix(strings.TrimPrefix(c.Names[0], "/"), suffix) {
+			matching = append(matching, c)
+		}
+	}
+	return r.toInfos(ctx, matching), nil
+}
+
+func (r *Real) FindByName(ctx context.Context, name string) (ContainerInfo, bool, error) {
+	insp, err := r.cli.ContainerInspect(ctx, name, client.ContainerInspectOptions{})
+	if err != nil {
+		if cerrdefs.IsNotFound(err) {
+			return ContainerInfo{}, false, nil
+		}
+		return ContainerInfo{}, false, err
+	}
+	c := insp.Container
+	info := ContainerInfo{
+		ID:   c.ID,
+		Name: strings.TrimPrefix(c.Name, "/"),
+	}
+	if c.Config != nil {
+		info.Image = c.Config.Image
+		info.Labels = c.Config.Labels
+	}
+	return info, true, nil
+}
+
+func (r *Real) toInfos(ctx context.Context, items []container.Summary) []ContainerInfo {
+	out := make([]ContainerInfo, 0, len(items))
+	for _, c := range items {
 		name := ""
 		if len(c.Names) > 0 {
 			name = strings.TrimPrefix(c.Names[0], "/")
@@ -110,7 +148,7 @@ func (r *Real) ListRunning(ctx context.Context) ([]ContainerInfo, error) {
 			Labels: c.Labels,
 		})
 	}
-	return out, nil
+	return out
 }
 
 func (r *Real) RemoteDigest(ctx context.Context, imageRef string) (string, error) {
